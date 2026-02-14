@@ -154,3 +154,107 @@ class VideoProcessor:
             clip.close()
             return files
         except: return []
+
+import os
+import time
+import json
+import re
+import google.generativeai as genai
+from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip, vfx
+import numpy as np
+from PIL import Image
+
+# ... (Mantenha a classe VideoProcessor antiga aqui em cima) ...
+
+class TemplateProcessor:
+    """
+    Classe responsável por aplicar Templates (Overlays) em vídeos.
+    """
+    def __init__(self):
+        pass
+
+    def get_preview_frame(self, video_path, template_path, y_offset):
+        """
+        Gera uma IMAGEM estática de como o vídeo vai ficar com o template.
+        Isso é ultra-rápido para o usuário ajustar a posição sem travar.
+        """
+        try:
+            # 1. Carrega o vídeo e pega um frame do meio (para ter imagem)
+            clip = VideoFileClip(video_path)
+            frame_t = clip.duration / 2  # Pega frame do meio
+            video_frame = clip.get_frame(frame_t) # Numpy Array
+            
+            # 2. Carrega o Template (Imagem)
+            template_clip = ImageClip(template_path)
+            
+            # Ajusta tamanho do template para bater com a largura do vídeo
+            if template_clip.w != clip.w:
+                template_clip = template_clip.resize(width=clip.w)
+
+            # 3. Cria a composição (apenas para este frame)
+            # O vídeo é o fundo, movido pelo y_offset
+            # O template fica por cima (fixo ou ajustado)
+            
+            # Nota: No MoviePy, a ordem na lista define as camadas (último fica em cima)
+            # Vamos criar um clipe de imagem a partir do frame do vídeo
+            frame_clip = ImageClip(video_frame).set_position(("center", y_offset))
+            
+            # Compõe: Fundo (Vídeo deslocado) + Frente (Template)
+            final_comp = CompositeVideoClip([frame_clip, template_clip.set_position("center")], size=template_clip.size)
+            
+            # Gera o frame final
+            preview_image = final_comp.get_frame(0)
+            
+            # Limpeza
+            clip.close()
+            template_clip.close()
+            final_comp.close()
+            
+            return preview_image
+            
+        except Exception as e:
+            print(f"Erro no preview: {e}")
+            return None
+
+    def render_video_with_template(self, video_path, template_path, y_offset, progress_callback=None):
+        """
+        Renderiza o VÍDEO COMPLETO com o template aplicado.
+        """
+        try:
+            clip = VideoFileClip(video_path)
+            template = ImageClip(template_path).set_duration(clip.duration)
+            
+            # Ajusta largura do template
+            if template.w != clip.w:
+                template = template.resize(width=clip.w)
+            
+            # Posiciona o vídeo (Fundo)
+            # ("center", y_offset) -> Centralizado horizontalmente, deslocado verticalmente
+            clip_positioned = clip.set_position(("center", y_offset))
+            template_positioned = template.set_position("center")
+            
+            # Composição: Vídeo atrás, Template na frente
+            final = CompositeVideoClip([clip_positioned, template_positioned], size=template.size)
+            
+            output_path = f"template_output_{int(time.time())}.mp4"
+            
+            # Callback para barra de progresso (simulado, pois moviepy trava o processo)
+            if progress_callback: progress_callback(0.5, "Renderizando vídeo final...")
+            
+            final.write_videofile(
+                output_path,
+                codec="libx264",
+                audio_codec="aac",
+                preset="ultrafast",
+                logger=None
+            )
+            
+            clip.close()
+            template.close()
+            final.close()
+            
+            return output_path
+            
+        except Exception as e:
+            print(f"Erro ao renderizar template: {e}")
+            return None
