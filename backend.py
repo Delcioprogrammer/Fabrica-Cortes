@@ -4,10 +4,10 @@ import json
 import re
 import google.generativeai as genai
 from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip, vfx
-from PIL import Image # <--- Importante para o novo preview rápido
+from PIL import Image
 import numpy as np
 
-# --- CLASSE 1: PROCESSADOR DE CORTES (MANTIDA IGUAL) ---
+# --- CLASSE 1: PROCESSADOR DE CORTES (IA) ---
 class VideoProcessor:
     def __init__(self, api_key):
         self.api_key = api_key
@@ -26,7 +26,7 @@ class VideoProcessor:
             return []
 
     def upload_and_analyze(self, video_path, user_orders="", status_callback=None):
-        if status_callback: status_callback("Enviando vídeo (Imagem + Áudio) para o Google Gemini...")
+        if status_callback: status_callback("Enviando vídeo para o Google Gemini...")
         try:
             video_file = genai.upload_file(path=video_path)
             while video_file.state.name == "PROCESSING":
@@ -34,16 +34,16 @@ class VideoProcessor:
                 video_file = genai.get_file(video_file.name)
             if video_file.state.name == "FAILED": raise Exception("Falha no Google.")
             
-            if status_callback: status_callback("IA a analisar o vídeo...")
+            if status_callback: status_callback("IA analisando (Visão + Audição)...")
 
-            base_prompt = """
-            Analise este vídeo de forma MULTIMODAL.
-            ORDEM DO USUÁRIO: "{user_orders}"
-            Retorne APENAS JSON: [{{"inicio": "MM:SS", "fim": "MM:SS", "titulo_arquivo": "Titulo"}}]
+            prompt = f"""
+            Analise este vídeo de forma MULTIMODAL (Visual + Audio).
+            ORDEM DO USUÁRIO: "{user_orders if user_orders else 'Identifique Title Cards (Telas pretas) e cortes lógicos.'}"
+            Retorne JSON PURO: [{{ "inicio": "MM:SS", "fim": "MM:SS", "titulo_arquivo": "Titulo" }}]
             """
-            prompt_final = base_prompt.format(user_orders=user_orders if user_orders else "Padrao: Title Cards")
+            
             model = genai.GenerativeModel(self.model_name)
-            response = model.generate_content([video_file, prompt_final], request_options={"timeout": 600})
+            response = model.generate_content([video_file, prompt], request_options={"timeout": 600})
             return self._clean_json_response(response.text)
         except Exception as e:
             print(f"Erro: {e}")
@@ -71,8 +71,10 @@ class VideoProcessor:
                 filename = os.path.join(output_dir, f"Corte_{i+1}_{safe_title}.mp4")
                 if end > clip.duration: end = clip.duration
                 if end <= start: continue
+                
                 sub = clip.subclip(start, end)
                 if speed_factor != 1.0: sub = sub.fx(vfx.speedx, speed_factor)
+                
                 sub.write_videofile(filename, codec="libx264", audio_codec="aac", preset='ultrafast', logger=None)
                 generated_files.append(filename)
                 if progress_callback: progress_callback((i+1)/len(cuts_data))
@@ -80,76 +82,103 @@ class VideoProcessor:
         clip.close()
         return generated_files
 
-# --- CLASSE 2: PROCESSADOR DE TEMPLATES (ATUALIZADA E BLINDADA) ---
+# --- CLASSE 2: PROCESSADOR DE TEMPLATES (CORRIGIDA) ---
 class TemplateProcessor:
     def __init__(self):
         pass
 
     def get_preview_frame(self, video_path, template_path, y_offset):
         """
-        Gera o preview usando PIL (Pillow) em vez de MoviePy.
-        Muito mais rápido e sem erros de renderização.
+        Gera preview redimensionando o VÍDEO para caber no TEMPLATE.
         """
         try:
-            # 1. Extrai frame do vídeo (usando MoviePy apenas para leitura)
-            clip = VideoFileClip(video_path)
-            frame_array = clip.get_frame(clip.duration / 2) # Pega frame do meio
-            clip.close() # Fecha logo para não ocupar memória
-
-            # 2. Converte para Imagem PIL
-            video_img = Image.fromarray(frame_array)
+            # 1. Carrega Template (Mestre) e garante transparência
             template_img = Image.open(template_path).convert("RGBA")
-
-            # 3. Ajusta o tamanho do Template para a largura do vídeo
-            target_width = video_img.width
-            ratio = target_width / float(template_img.width)
-            target_height = int(float(template_img.height) * float(ratio))
             
-            # Redimensiona o template com alta qualidade
-            template_img = template_img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+            # 2. Carrega Frame do Vídeo
+            clip = VideoFileClip(video_path)
+            # Pega um frame aos 20% do vídeo (evita pegar tela preta de intro)
+            frame_t = min(clip.duration * 0.2, 5.0) 
+            frame_array = clip.get_frame(frame_t)
+            clip.close()
+            
+            video_img = Image.fromarray(frame_array).convert("RGBA")
 
-            # 4. Cria um Canvas (Fundo Transparente) do tamanho do Template
-            # O template define o tamanho final do vídeo vertical (shorts)
-            canvas = Image.new('RGBA', template_img.size, (0,0,0,0))
+            # 3. Redimensiona o VÍDEO para ter a mesma LARGURA do Template
+            # O Template dita o tamanho final (ex: 1080px de largura)
+            ratio = template_img.width / float(video_img.width)
+            new_height = int(video_img.height * ratio)
+            
+            video_img = video_img.resize((template_img.width, new_height), Image.Resampling.LANCZOS)
 
-            # 5. Cola o vídeo (Fundo) na posição escolhida
-            # Centraliza horizontalmente: (LarguraCanvas - LarguraVideo) / 2
-            x_pos = (canvas.width - video_img.width) // 2
-            canvas.paste(video_img, (x_pos, y_offset))
+            # 4. Cria Canvas do tamanho do Template
+            canvas = Image.new('RGBA', template_img.size, (0, 0, 0, 0)) # Fundo transparente
 
-            # 6. Cola o Template (Moldura) por cima
-            # O terceiro argumento serve como máscara de transparência
+            # 5. Cola o Vídeo (considerando o deslocamento Y)
+            # Centraliza o vídeo verticalmente por padrão + o ajuste do usuário
+            # Se y_offset for 0, o vídeo começa no topo ou meio? Vamos por no topo + offset
+            # Ou melhor: Centralizado + Offset
+            
+            center_y = (template_img.height - video_img.height) // 2
+            final_y = center_y + y_offset
+            
+            canvas.paste(video_img, (0, final_y))
+
+            # 6. Cola o Template por cima (A Mágica)
+            # Usa o próprio template como máscara para garantir transparência
             canvas.paste(template_img, (0, 0), template_img)
 
             return canvas
 
         except Exception as e:
-            print(f"Erro detalhado no preview: {e}")
+            print(f"Erro Preview: {e}")
             return None
 
     def render_video_with_template(self, video_path, template_path, y_offset, progress_callback=None):
         try:
             clip = VideoFileClip(video_path)
-            template = ImageClip(template_path).set_duration(clip.duration)
+            template = ImageClip(template_path).convert("RGBA") # Garante alpha channel
             
-            if template.w != clip.w:
-                template = template.resize(width=clip.w)
+            # 1. Redimensiona o VÍDEO para caber na largura do TEMPLATE
+            # (Lógica inversa do MoviePy padrão, aqui o Template manda)
+            ratio = template.w / clip.w
+            clip_resized = clip.resize(ratio)
             
-            # Aplica a posição ajustada no preview
-            clip_positioned = clip.set_position(("center", y_offset))
+            # 2. Configura Duração
+            template = template.set_duration(clip.duration)
+            
+            # 3. Posicionamento
+            # Calcula o centro vertical
+            center_y = (template.h - clip_resized.h) / 2
+            final_y = center_y + y_offset
+            
+            clip_positioned = clip_resized.set_position(("center", final_y))
             template_positioned = template.set_position("center")
             
-            final = CompositeVideoClip([clip_positioned, template_positioned], size=template.size)
-            output_path = f"template_output_{int(time.time())}.mp4"
+            # 4. Composição: Vídeo atrás, Template na frente
+            final = CompositeVideoClip(
+                [clip_positioned, template_positioned], 
+                size=template.size
+            )
             
-            if progress_callback: progress_callback(0.2, "Renderizando vídeo final (isso pode demorar)...")
+            output_path = f"final_render_{int(time.time())}.mp4"
             
-            final.write_videofile(output_path, codec="libx264", audio_codec="aac", preset="ultrafast", logger=None)
+            if progress_callback: progress_callback(0.1, "Renderizando (pode demorar)...")
+            
+            final.write_videofile(
+                output_path, 
+                codec="libx264", 
+                audio_codec="aac", 
+                preset="ultrafast", 
+                logger=None,
+                threads=4
+            )
             
             clip.close()
             template.close()
             final.close()
             return output_path
+            
         except Exception as e:
-            print(f"Erro render: {e}")
+            print(f"Erro Render: {e}")
             return None
