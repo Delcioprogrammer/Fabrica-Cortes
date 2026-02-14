@@ -71,15 +71,24 @@ if api_key:
             )
             st.session_state["user_prompt"] = input_text
 
-        with col_magic:
+       with col_magic:
             st.markdown("<br><br>", unsafe_allow_html=True)
             if st.button("✨ Otimizar com IA", type="secondary", help="Reescreve seu pedido tecnicamente"):
-                if st.session_state["user_prompt"]:
+                # Verifica se há texto na chave do componente ou na variável de backup
+                texto_atual = st.session_state.get("text_area_input", "") or st.session_state.get("user_prompt", "")
+                
+                if texto_atual:
                     with st.spinner("Aprimorando prompt..."):
                         try:
                             proc = VideoProcessor(api_key)
-                            novo_prompt = proc.optimize_prompt(st.session_state["user_prompt"])
+                            novo_prompt = proc.optimize_prompt(texto_atual)
+                            
+                            # --- O SEGREDO ESTÁ AQUI ---
+                            # Forçamos a atualização direta na chave do widget
+                            st.session_state["text_area_input"] = novo_prompt
                             st.session_state["user_prompt"] = novo_prompt
+                            # ---------------------------
+                            
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro ao otimizar: {e}")
