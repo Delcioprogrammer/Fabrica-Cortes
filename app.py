@@ -17,6 +17,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- ESTADO DA SESSÃO (Memória do Site) ---
+if "user_prompt" not in st.session_state:
+    st.session_state["user_prompt"] = ""
+if "gemini_api_key" not in st.session_state:
+    st.session_state["gemini_api_key"] = ""
+
 # --- FUNÇÕES UTILITÁRIAS ---
 def create_zip_of_files(file_paths):
     if not os.path.exists("cortes_temp"):
@@ -33,51 +39,44 @@ def cleanup_temp_file(path):
         try: os.remove(path)
         except: pass
 
-# --- CALLBACK PARA OTIMIZAÇÃO (SEM ERRO DE WIDGET) ---
+# --- CALLBACK PARA OTIMIZAÇÃO (CORRIGIDO) ---
 def otimizar_callback():
+    """Roda ANTES de recarregar a tela."""
+    # 1. Pega o texto atual da caixa
     texto_atual = st.session_state.get("text_area_input", "")
-    # Pega a API Key do estado ou dos secrets
-    chave_atual = st.session_state.get("api_key_final", "")
+    # 2. Pega a API Key da MEMÓRIA DO SISTEMA (Aqui estava o erro antes)
+    chave_api = st.session_state.get("gemini_api_key", "")
     
-    if texto_atual and chave_atual:
+    if texto_atual and chave_api:
         try:
-            proc = VideoProcessor(chave_atual)
+            proc = VideoProcessor(chave_api)
+            # Chama a IA para melhorar o texto
             novo_prompt = proc.optimize_prompt(texto_atual)
+            
+            # Atualiza a caixa de texto para a próxima tela
             st.session_state["text_area_input"] = novo_prompt
+            # Atualiza também a variável de backup
             st.session_state["user_prompt"] = novo_prompt
+            
         except Exception as e:
-            st.error(f"Erro na otimização: {e}")
+            st.error(f"Erro ao conectar com a IA: {e}")
+    elif not chave_api:
+        st.toast("⚠️ API Key não encontrada. Configure na barra lateral.")
     else:
-        st.toast("⚠️ Falta API Key ou Texto.")
+        st.toast("⚠️ Escreva uma instrução básica antes de otimizar.")
 
-# --- ESTADO DA SESSÃO ---
-if "user_prompt" not in st.session_state:
-    st.session_state["user_prompt"] = ""
-
-# --- CABEÇALHO ---
-st.title("✂️ Fábrica de Cortes Virais")
-st.caption("Transforme vídeos longos em Shorts/Reels. Suporte a YouTube (Playlists) e Arquivos Locais.")
-
-# --- BARRA LATERAL INTELIGENTE (AUTO-SAVE) ---
+# --- BARRA LATERAL ---
 with st.sidebar:
     st.header("⚙️ Configurações")
     
-    # 1. TENTA LER DOS SEGREDOS (Configuração na Nuvem)
-    # Procura por uma chave chamada "GEMINI_KEY" nos segredos do Streamlit
-    secret_key = st.secrets.get("GEMINI_KEY", None)
+    # Tenta pegar dos segredos ou usa vazio
+    default_key = st.secrets.get("GEMINI_KEY", "")
     
-    api_key = ""
+    # Campo de senha
+    api_key_input = st.text_input("🔑 Google Gemini API Key", value=default_key, type="password")
     
-    if secret_key:
-        st.success("🔑 API Key carregada do Sistema!")
-        api_key = secret_key
-    else:
-        # Se não tiver segredo, mostra o campo manual
-        api_key = st.text_input("🔑 Google Gemini API Key", type="password")
-        st.caption("Dica: Configure 'Secrets' no painel do Streamlit para salvar permanentemente.")
-    
-    # Salva no estado para o callback usar
-    st.session_state["api_key_final"] = api_key
+    # SALVA A CHAVE NA MEMÓRIA IMEDIATAMENTE (Para o callback usar)
+    st.session_state["gemini_api_key"] = api_key_input
     
     st.divider()
     
@@ -87,8 +86,13 @@ with st.sidebar:
         st.divider()
         speed = st.slider("Velocidade (Viral Mode)", 1.0, 2.0, 1.1, 0.1)
 
+# --- CABEÇALHO ---
+st.title("✂️ Fábrica de Cortes Virais")
+st.caption("Transforme vídeos longos em Shorts/Reels. Suporte a YouTube (Playlists) e Arquivos Locais.")
+
 # --- ÁREA DE INSTRUÇÕES ---
-if api_key:
+# Verifica a chave da memória
+if st.session_state.get("gemini_api_key"):
     with st.container():
         st.success("🔓 Sistema Conectado")
         
@@ -97,19 +101,22 @@ if api_key:
         with col_input:
             input_text = st.text_area(
                 "🧠 O que você quer cortar?",
+                # O valor inicial vem do session_state
                 value=st.session_state["user_prompt"],
                 placeholder="Ex: Corte as partes engraçadas... (Deixe vazio para cortar por Telas Pretas)",
                 height=130,
-                key="text_area_input"
+                key="text_area_input" # Chave vital para o funcionamento
             )
+            # Sincroniza o manual com a memória
             st.session_state["user_prompt"] = input_text
 
         with col_magic:
             st.markdown("<br><br>", unsafe_allow_html=True)
+            # O botão chama a função otimizar_callback
             st.button(
                 "✨ Otimizar com IA", 
                 type="secondary", 
-                help="Reescreve seu pedido tecnicamente",
+                help="A IA vai reescrever seu pedido tecnicamente.",
                 on_click=otimizar_callback
             )
 
@@ -124,6 +131,7 @@ processar = False
 cookies_path = None
 origem = ""
 
+# Processamento do arquivo de cookies
 if cookies_file:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode='wb') as f:
         f.write(cookies_file.getvalue())
@@ -132,20 +140,29 @@ if cookies_file:
 with tab_yt:
     yt_url = st.text_input("Link do Vídeo ou Playlist:")
     valid_url = len(yt_url) > 10 and ("youtube.com" in yt_url or "youtu.be" in yt_url)
-    if st.button("🚀 Processar YouTube", type="primary", disabled=not (api_key and valid_url)):
+    
+    # Usa a chave da memória para liberar o botão
+    has_key = bool(st.session_state.get("gemini_api_key"))
+    
+    if st.button("🚀 Processar YouTube", type="primary", disabled=not (has_key and valid_url)):
         processar = True
         origem = "youtube"
 
 with tab_file:
     uploaded = st.file_uploader("Arquivo MP4/MOV/MKV", type=["mp4", "mov", "mkv"])
-    if st.button("🚀 Processar Arquivo", type="primary", disabled=not (api_key and uploaded)):
+    has_key = bool(st.session_state.get("gemini_api_key"))
+    
+    if st.button("🚀 Processar Arquivo", type="primary", disabled=not (has_key and uploaded)):
         processar = True
         origem = "arquivo"
 
 # --- LÓGICA PRINCIPAL ---
-if processar and api_key:
+if processar:
+    # Pega a chave e a instrução direto da memória
+    current_api_key = st.session_state["gemini_api_key"]
     instrucao_final = st.session_state.get("text_area_input", "")
-    processor = VideoProcessor(api_key)
+    
+    processor = VideoProcessor(current_api_key)
     
     try:
         with st.status("🏭 Iniciando linha de produção...", expanded=True) as status:
