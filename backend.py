@@ -24,7 +24,9 @@ class VideoProcessor:
         
         # Limpa downloads antigos para não lotar o disco
         files = glob.glob(f"{download_folder}/*")
-        for f in files: os.remove(f)
+        for f in files: 
+            try: os.remove(f)
+            except: pass
 
         if progress_callback: progress_callback("Conectando ao YouTube...")
 
@@ -34,7 +36,7 @@ class VideoProcessor:
             'quiet': True,
             'no_warnings': True,
             'ignoreerrors': True, # Se um vídeo da playlist falhar, continua
-            'playlistend': 5,     # LIMITE DE SEGURANÇA: Max 5 vídeos por playlist (para não estourar o servidor free)
+            'playlistend': 5,     # LIMITE DE SEGURANÇA: Max 5 vídeos por playlist
             'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         }
 
@@ -75,6 +77,7 @@ class VideoProcessor:
             return []
 
     def analyze_video(self, video_path, user_orders="", status_callback=None):
+        # Renomeei de 'upload_and_analyze' para 'analyze_video' para ficar mais limpo
         if status_callback: status_callback(f"Enviando {os.path.basename(video_path)} para o Gemini...")
         
         try:
