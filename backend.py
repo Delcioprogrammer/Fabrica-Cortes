@@ -2,14 +2,66 @@ import os
 import time
 import json
 import re
+import glob
+import yt_dlp
 import google.generativeai as genai
 from moviepy.editor import VideoFileClip, vfx
 
 class VideoProcessor:
     def __init__(self, api_key):
         self.api_key = api_key
-        genai.configure(api_key=self.api_key)
+        if api_key:
+            genai.configure(api_key=self.api_key)
         self.model_name = 'models/gemini-1.5-flash'
+
+    def download_from_youtube(self, url, progress_callback=None):
+        """
+        Baixa vídeos do YouTube (Link único ou Playlist).
+        Retorna uma lista de caminhos dos arquivos baixados.
+        """
+        download_folder = "downloads_yt"
+        if not os.path.exists(download_folder): os.makedirs(download_folder)
+        
+        # Limpa downloads antigos para não lotar o disco
+        files = glob.glob(f"{download_folder}/*")
+        for f in files: os.remove(f)
+
+        if progress_callback: progress_callback("Conectando ao YouTube...")
+
+        ydl_opts = {
+            'format': 'best[ext=mp4]/best', # Tenta MP4 primeiro
+            'outtmpl': f'{download_folder}/%(title)s.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+            'ignoreerrors': True, # Se um vídeo da playlist falhar, continua
+            'playlistend': 5,     # LIMITE DE SEGURANÇA: Max 5 vídeos por playlist (para não estourar o servidor free)
+            'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        }
+
+        downloaded_paths = []
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                
+                # Lógica para detectar se é Playlist ou Vídeo Único
+                if 'entries' in info:
+                    # É Playlist
+                    for entry in info['entries']:
+                        if entry:
+                            filename = ydl.prepare_filename(entry)
+                            downloaded_paths.append(filename)
+                else:
+                    # É Vídeo Único
+                    filename = ydl.prepare_filename(info)
+                    downloaded_paths.append(filename)
+                    
+            if progress_callback: progress_callback(f"Download concluído! {len(downloaded_paths)} vídeos baixados.")
+            return downloaded_paths
+
+        except Exception as e:
+            print(f"Erro no download: {e}")
+            return []
 
     def _clean_json_response(self, text):
         try:
@@ -22,11 +74,8 @@ class VideoProcessor:
         except:
             return []
 
-    def upload_and_analyze(self, video_path, user_orders="", status_callback=None):
-        """
-        Envia o vídeo para o Gemini com instruções para usar VISÃO e AUDIÇÃO.
-        """
-        if status_callback: status_callback("Enviando vídeo (Imagem + Áudio) para o Google Gemini...")
+    def analyze_video(self, video_path, user_orders="", status_callback=None):
+        if status_callback: status_callback(f"Enviando {os.path.basename(video_path)} para o Gemini...")
         
         try:
             video_file = genai.upload_file(path=video_path)
@@ -35,43 +84,29 @@ class VideoProcessor:
                 time.sleep(2)
                 video_file = genai.get_file(video_file.name)
 
-            if video_file.state.name == "FAILED":
-                raise Exception("Falha no processamento do vídeo pelo Google.")
+            if video_file.state.name == "FAILED": return []
 
-            if status_callback: status_callback("IA assistindo e ouvindo o vídeo para encontrar os cortes...")
+            if status_callback: status_callback("IA analisando (Visão + Audição)...")
 
-            # --- O NOVO PROMPT "COM SENTIDOS" ---
-            base_prompt = """
-            Você é um Editor de Vídeo Profissional e Inteligente.
+            prompt = f"""
+            Analise este vídeo de forma MULTIMODAL (Visão + Audição).
             
-            SUA MISSÃO:
-            Analise este vídeo de forma MULTIMODAL (Use seus 'olhos' para ver a ação e seus 'ouvidos' para entender a fala, o tom de voz e a música).
+            ORDEM DO USUÁRIO: "{user_orders}"
             
-            ORDEM DO USUÁRIO (Prioridade Máxima):
-            "{user_orders}"
+            Se a ordem for vazia, use o padrão: Identifique segmentos separados por Telas Pretas (Title Cards).
             
-            INSTRUÇÕES DE LÓGICA:
-            1. Se o usuário pediu algo específico (ex: "partes engraçadas", "gols", "dicas"), use o áudio e vídeo para encontrar esses momentos exatos.
-            2. Se o pedido do usuário for VAZIO, use o modo padrão: Identifique segmentos separados por Telas Pretas (Title Cards).
-            3. Seja preciso nos tempos de inicio e fim. Não corte a fala no meio.
-            
-            FORMATO DE RESPOSTA OBRIGATÓRIO (JSON PURO):
-            Retorne APENAS uma lista JSON. Nada de texto antes ou depois.
+            Retorne APENAS JSON puro:
             [
-              {{"inicio": "MM:SS", "fim": "MM:SS", "titulo_arquivo": "Resumo do que acontece"}}
+              {{"inicio": "MM:SS", "fim": "MM:SS", "titulo_arquivo": "Titulo"}}
             ]
             """
             
-            # Formata o prompt inserindo a ordem do usuário
-            prompt_final = base_prompt.format(user_orders=user_orders if user_orders else "Nenhuma ordem específica. Use o padrão de Telas Pretas.")
-            
             model = genai.GenerativeModel(self.model_name)
-            response = model.generate_content([video_file, prompt_final], request_options={"timeout": 600})
-            
+            response = model.generate_content([video_file, prompt])
             return self._clean_json_response(response.text)
 
         except Exception as e:
-            print(f"Erro na análise: {e}")
+            print(f"Erro IA: {e}")
             return []
 
     def _time_to_seconds(self, time_str):
@@ -85,8 +120,6 @@ class VideoProcessor:
     def process_cuts(self, video_path, cuts_data, speed_factor=1.1, progress_callback=None):
         clip = VideoFileClip(video_path)
         generated_files = []
-        
-        # Cria pasta temporária
         output_dir = "cortes_temp"
         if not os.path.exists(output_dir): os.makedirs(output_dir)
 
@@ -95,7 +128,7 @@ class VideoProcessor:
                 start = self._time_to_seconds(cut['inicio'])
                 end = self._time_to_seconds(cut['fim'])
                 safe_title = "".join([c for c in cut['titulo_arquivo'] if c.isalnum()]).strip()[:30]
-                filename = os.path.join(output_dir, f"Corte_{i+1}_{safe_title}.mp4")
+                filename = os.path.join(output_dir, f"{os.path.basename(video_path)[:10]}_{i}_{safe_title}.mp4")
 
                 if end > clip.duration: end = clip.duration
                 if end <= start: continue
