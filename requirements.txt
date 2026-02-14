@@ -5,6 +5,7 @@ imageio==2.34.1
 imageio-ffmpeg
 decorator==4.4.2
 numpy<2.0.0
+yt-dlp
 proglog
 protobuf
 requests
