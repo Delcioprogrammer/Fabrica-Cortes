@@ -14,7 +14,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("✂️ Fábrica de Cortes Virais")
-st.caption("Baixe do YouTube ou suba arquivos. A IA faz o resto.")
+st.caption("Baixe do YouTube (Anti-Bloqueio) ou suba arquivos. A IA faz o resto.")
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -22,104 +22,106 @@ with st.sidebar:
     api_key = st.text_input("🔑 Google Gemini API Key", type="password")
     
     st.divider()
+    
+    # NOVO: Uploader de Cookies
+    st.subheader("🍪 Acesso YouTube (Anti-Bloqueio)")
+    cookies_file = st.file_uploader("Solte o arquivo cookies.txt aqui", type=["txt"], help="Essencial para vídeos com restrição de idade ou bloqueio de bot.")
+    
+    st.divider()
     speed = st.slider("Velocidade do Corte", 1.0, 2.0, 1.1, 0.1)
-    st.info("Nota: Playlists são limitadas a 5 vídeos por vez.")
 
-# --- LÓGICA DE CONDICIONAL (Só mostra instruções se tiver API Key) ---
+# --- LÓGICA DE CONDICIONAL ---
 user_instructions = ""
 
 if api_key:
-    # Cria container para as instruções aparecerem em destaque
     with st.container():
-        st.success("🔓 Sistema Desbloqueado!")
+        st.success("🔓 Sistema Ativo")
         col_inst, col_dicas = st.columns([2, 1])
         
         with col_inst:
             user_instructions = st.text_area(
-                "🧠 Ordens para a IA (Opcional):",
-                placeholder="Ex: Corte apenas as partes engraçadas... Se deixar vazio, corto por Telas Pretas.",
+                "🧠 Ordens para a IA:",
+                placeholder="Ex: Corte as partes engraçadas... (Vazio = Telas Pretas)",
                 height=100
             )
         with col_dicas:
-            st.markdown("**Dicas Rápidas:**")
-            if st.button("🤣 Engraçados"): user_instructions = "Corte apenas momentos de risada e humor."
-            if st.button("🔥 Ação"): user_instructions = "Corte momentos de ação intensa e gritos."
+            st.markdown("**Dicas:**")
+            if st.button("🤣 Humor"): user_instructions = "Corte momentos de risada e piadas."
+            if st.button("💀 Crime/Suspense"): user_instructions = "Foque na narrativa de crime e momentos de tensão."
 else:
-    st.warning("🔒 Para desbloquear a caixa de instruções e iniciar, insira sua API Key na barra lateral.")
+    st.warning("🔒 Insira a API Key para começar.")
 
-# --- ÁREA DE INPUT (Abas) ---
+# --- ABAS ---
 tab_yt, tab_file = st.tabs(["🔴 Link do YouTube", "📂 Arquivo Local"])
 
 video_paths = []
 processar = False
+cookies_path = None
 
-# ABA 1: YOUTUBE
+# Trata o arquivo de cookies se ele foi enviado
+if cookies_file:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode='wb') as f:
+        f.write(cookies_file.getvalue())
+        cookies_path = f.name
+
 with tab_yt:
-    yt_url = st.text_input("Cole o link (Vídeo ou Playlist):", placeholder="https://youtube.com/...")
+    yt_url = st.text_input("Cole o link (Vídeo/Playlist):")
     if st.button("🚀 Processar YouTube", type="primary", disabled=not api_key):
         processar = True
         origem = "youtube"
 
-# ABA 2: ARQUIVO
 with tab_file:
-    uploaded = st.file_uploader("Arraste o arquivo", type=["mp4", "mov", "mkv"])
+    uploaded = st.file_uploader("Arquivo de Vídeo", type=["mp4", "mov", "mkv"])
     if st.button("🚀 Processar Arquivo", type="primary", disabled=not (api_key and uploaded)):
         processar = True
         origem = "arquivo"
 
-# --- O GRANDE PROCESSAMENTO ---
+# --- PROCESSAMENTO ---
 if processar and api_key:
     processor = VideoProcessor(api_key)
     
-    # CONTAINER DE PROGRESSO (Histórico do que está acontecendo)
     with st.status("🏭 Iniciando a Fábrica...", expanded=True) as status:
         
-        # 1. DOWNLOAD (Se for YouTube)
+        # 1. DOWNLOAD
         if origem == "youtube":
             status.write("⬇️ Baixando vídeos do YouTube...")
-            video_paths = processor.download_from_youtube(yt_url, lambda x: status.write(f"📥 {x}"))
+            # Passa o caminho dos cookies para o backend
+            video_paths = processor.download_from_youtube(
+                yt_url, 
+                cookies_path=cookies_path, 
+                progress_callback=lambda x: status.write(f"📥 {x}")
+            )
             if not video_paths:
-                status.update(label="❌ Erro no Download", state="error")
+                status.update(label="❌ Falha no Download (YouTube bloqueou)", state="error")
+                st.error("Dica: Use o arquivo 'cookies.txt' na barra lateral para evitar bloqueios.")
                 st.stop()
         else:
-            # Salva arquivo local
             tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
             tfile.write(uploaded.read())
             video_paths = [tfile.name]
 
-        status.write(f"✅ Temos {len(video_paths)} vídeo(s) na fila.")
+        status.write(f"✅ {len(video_paths)} vídeos na fila.")
 
-        # 2. LOOP DE PROCESSAMENTO (Para cada vídeo)
+        # 2. LOOP
         todos_cortes = []
-        
         for i, vid_path in enumerate(video_paths):
             nome_vid = os.path.basename(vid_path)
-            status.write(f"🎞️ Processando [{i+1}/{len(video_paths)}]: {nome_vid}")
+            status.write(f"🎞️ [{i+1}/{len(video_paths)}] Analisando: {nome_vid}")
             
-            # Análise IA
-            status.write("🤖 IA Assistindo e Ouvindo...")
             cortes = processor.analyze_video(vid_path, user_instructions)
             
             if cortes:
-                status.write(f"✂️ IA encontrou {len(cortes)} cortes. Renderizando...")
-                # Edição Física
-                arquivos_finais = processor.process_cuts(
-                    vid_path, 
-                    cortes, 
-                    speed_factor=speed,
-                    progress_callback=lambda p: None # Simplifiquei pra não poluir o status
-                )
-                todos_cortes.extend(arquivos_finais)
+                status.write(f"✂️ {len(cortes)} cortes encontrados. Editando...")
+                arquivos = processor.process_cuts(vid_path, cortes, speed_factor=speed)
+                todos_cortes.extend(arquivos)
             else:
-                status.write("⚠️ Nenhum corte encontrado neste vídeo.")
+                status.write("⚠️ Nenhum corte detectado (IA não encontrou o padrão ou bloqueou).")
 
-        # 3. FINALIZAÇÃO
+        # 3. FIM
         if todos_cortes:
-            status.update(label="🎉 Processo Concluído!", state="complete", expanded=False)
+            status.update(label="🎉 Sucesso!", state="complete", expanded=False)
             st.balloons()
-            
             st.divider()
-            st.subheader("📦 Seus Cortes Estão Prontos:")
             
             cols = st.columns(2)
             for idx, f in enumerate(todos_cortes):
@@ -129,4 +131,4 @@ if processar and api_key:
                     with open(f, "rb") as vid:
                         st.download_button(f"⬇️ Baixar {nome}", vid, file_name=nome, mime="video/mp4")
         else:
-            status.update(label="❌ Nenhum corte gerado no total.", state="error")
+            status.update(label="❌ Nenhum vídeo gerado.", state="error")
