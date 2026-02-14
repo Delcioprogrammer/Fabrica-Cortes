@@ -36,7 +36,6 @@ def cleanup_temp_file(path):
         except: pass
 
 # --- ESTADO DA SESSÃO ---
-# Inicializa as variáveis se não existirem
 if "user_prompt" not in st.session_state:
     st.session_state["user_prompt"] = ""
 
@@ -57,7 +56,24 @@ with st.sidebar:
         st.divider()
         speed = st.slider("Velocidade (Viral Mode)", 1.0, 2.0, 1.1, 0.1)
 
-# --- ÁREA DE INSTRUÇÕES (COM IA GENERATIVA) ---
+# --- FUNÇÃO DE CALLBACK (A SOLUÇÃO DO ERRO) ---
+def otimizar_callback():
+    """Esta função roda ANTES do site recarregar, permitindo alterar o texto."""
+    texto_atual = st.session_state.get("text_area_input", "")
+    
+    if texto_atual and api_key:
+        try:
+            proc = VideoProcessor(api_key)
+            novo_prompt = proc.optimize_prompt(texto_atual)
+            # Atualiza diretamente a chave do widget e a variável de controle
+            st.session_state["text_area_input"] = novo_prompt
+            st.session_state["user_prompt"] = novo_prompt
+        except Exception as e:
+            st.error(f"Erro na otimização: {e}")
+    else:
+        st.toast("⚠️ Escreva algo ou verifique sua API Key.")
+
+# --- ÁREA DE INSTRUÇÕES ---
 if api_key:
     with st.container():
         st.success("🔓 Sistema Conectado")
@@ -65,37 +81,28 @@ if api_key:
         col_input, col_magic = st.columns([3, 1])
         
         with col_input:
-            # O texto exibido vem da chave 'text_area_input' se existir, ou do user_prompt
+            # O input mantém o valor sincronizado automaticamente
             input_text = st.text_area(
                 "🧠 O que você quer cortar?",
-                value=st.session_state.get("user_prompt", ""),
+                value=st.session_state["user_prompt"],
                 placeholder="Ex: Corte as partes engraçadas... (Deixe vazio para cortar por Telas Pretas)",
                 height=130,
-                key="text_area_input" # Essa chave é fundamental
+                key="text_area_input"
             )
-            # Sincroniza o que foi digitado com a variável de backup
+            # Sincroniza o que usuário digita com a variável de backup
             st.session_state["user_prompt"] = input_text
 
         with col_magic:
             st.markdown("<br><br>", unsafe_allow_html=True)
-            if st.button("✨ Otimizar com IA", type="secondary", help="Reescreve seu pedido tecnicamente"):
-                # Pega o texto atual da tela
-                texto_para_melhorar = st.session_state.get("text_area_input", "")
-                
-                if texto_para_melhorar:
-                    with st.spinner("Aprimorando prompt..."):
-                        try:
-                            proc = VideoProcessor(api_key)
-                            novo_prompt = proc.optimize_prompt(texto_para_melhorar)
-                            
-                            # --- O PULO DO GATO PARA ATUALIZAR A TELA ---
-                            st.session_state["text_area_input"] = novo_prompt
-                            st.session_state["user_prompt"] = novo_prompt
-                            st.rerun() # Força o Streamlit a recarregar e mostrar o novo texto
-                        except Exception as e:
-                            st.error(f"Erro ao otimizar: {e}")
-                else:
-                    st.toast("⚠️ Escreva uma instrução básica primeiro.")
+            
+            # BOTÃO COM CALLBACK (on_click)
+            st.button(
+                "✨ Otimizar com IA", 
+                type="secondary", 
+                help="Reescreve seu pedido tecnicamente",
+                on_click=otimizar_callback # <--- A MÁGICA ACONTECE AQUI
+            )
+
 else:
     st.warning("🔒 Digite sua API Key na barra lateral para liberar o sistema.")
 
@@ -128,7 +135,7 @@ with tab_file:
 
 # --- LÓGICA PRINCIPAL ---
 if processar and api_key:
-    # Garante que usamos a versão mais atualizada da instrução (manual ou IA)
+    # Garante que usamos a versão mais atualizada da instrução
     instrucao_final = st.session_state.get("text_area_input", "")
     
     processor = VideoProcessor(api_key)
