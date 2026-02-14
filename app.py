@@ -19,7 +19,6 @@ st.markdown("""
 
 # --- FUNÇÕES UTILITÁRIAS ---
 def create_zip_of_files(file_paths):
-    """Cria um arquivo ZIP contendo todos os vídeos processados."""
     if not os.path.exists("cortes_temp"):
         os.makedirs("cortes_temp")
     zip_path = os.path.join("cortes_temp", "Todos_Os_Cortes.zip")
@@ -30,10 +29,26 @@ def create_zip_of_files(file_paths):
     return zip_path
 
 def cleanup_temp_file(path):
-    """Remove arquivo temporário com segurança."""
     if path and os.path.exists(path):
         try: os.remove(path)
         except: pass
+
+# --- CALLBACK PARA OTIMIZAÇÃO (SEM ERRO DE WIDGET) ---
+def otimizar_callback():
+    texto_atual = st.session_state.get("text_area_input", "")
+    # Pega a API Key do estado ou dos secrets
+    chave_atual = st.session_state.get("api_key_final", "")
+    
+    if texto_atual and chave_atual:
+        try:
+            proc = VideoProcessor(chave_atual)
+            novo_prompt = proc.optimize_prompt(texto_atual)
+            st.session_state["text_area_input"] = novo_prompt
+            st.session_state["user_prompt"] = novo_prompt
+        except Exception as e:
+            st.error(f"Erro na otimização: {e}")
+    else:
+        st.toast("⚠️ Falta API Key ou Texto.")
 
 # --- ESTADO DA SESSÃO ---
 if "user_prompt" not in st.session_state:
@@ -43,10 +58,26 @@ if "user_prompt" not in st.session_state:
 st.title("✂️ Fábrica de Cortes Virais")
 st.caption("Transforme vídeos longos em Shorts/Reels. Suporte a YouTube (Playlists) e Arquivos Locais.")
 
-# --- BARRA LATERAL ---
+# --- BARRA LATERAL INTELIGENTE (AUTO-SAVE) ---
 with st.sidebar:
     st.header("⚙️ Configurações")
-    api_key = st.text_input("🔑 Google Gemini API Key", type="password")
+    
+    # 1. TENTA LER DOS SEGREDOS (Configuração na Nuvem)
+    # Procura por uma chave chamada "GEMINI_KEY" nos segredos do Streamlit
+    secret_key = st.secrets.get("GEMINI_KEY", None)
+    
+    api_key = ""
+    
+    if secret_key:
+        st.success("🔑 API Key carregada do Sistema!")
+        api_key = secret_key
+    else:
+        # Se não tiver segredo, mostra o campo manual
+        api_key = st.text_input("🔑 Google Gemini API Key", type="password")
+        st.caption("Dica: Configure 'Secrets' no painel do Streamlit para salvar permanentemente.")
+    
+    # Salva no estado para o callback usar
+    st.session_state["api_key_final"] = api_key
     
     st.divider()
     
@@ -56,23 +87,6 @@ with st.sidebar:
         st.divider()
         speed = st.slider("Velocidade (Viral Mode)", 1.0, 2.0, 1.1, 0.1)
 
-# --- FUNÇÃO DE CALLBACK (A SOLUÇÃO DO ERRO) ---
-def otimizar_callback():
-    """Esta função roda ANTES do site recarregar, permitindo alterar o texto."""
-    texto_atual = st.session_state.get("text_area_input", "")
-    
-    if texto_atual and api_key:
-        try:
-            proc = VideoProcessor(api_key)
-            novo_prompt = proc.optimize_prompt(texto_atual)
-            # Atualiza diretamente a chave do widget e a variável de controle
-            st.session_state["text_area_input"] = novo_prompt
-            st.session_state["user_prompt"] = novo_prompt
-        except Exception as e:
-            st.error(f"Erro na otimização: {e}")
-    else:
-        st.toast("⚠️ Escreva algo ou verifique sua API Key.")
-
 # --- ÁREA DE INSTRUÇÕES ---
 if api_key:
     with st.container():
@@ -81,7 +95,6 @@ if api_key:
         col_input, col_magic = st.columns([3, 1])
         
         with col_input:
-            # O input mantém o valor sincronizado automaticamente
             input_text = st.text_area(
                 "🧠 O que você quer cortar?",
                 value=st.session_state["user_prompt"],
@@ -89,18 +102,15 @@ if api_key:
                 height=130,
                 key="text_area_input"
             )
-            # Sincroniza o que usuário digita com a variável de backup
             st.session_state["user_prompt"] = input_text
 
         with col_magic:
             st.markdown("<br><br>", unsafe_allow_html=True)
-            
-            # BOTÃO COM CALLBACK (on_click)
             st.button(
                 "✨ Otimizar com IA", 
                 type="secondary", 
                 help="Reescreve seu pedido tecnicamente",
-                on_click=otimizar_callback # <--- A MÁGICA ACONTECE AQUI
+                on_click=otimizar_callback
             )
 
 else:
@@ -114,7 +124,6 @@ processar = False
 cookies_path = None
 origem = ""
 
-# Processamento do arquivo de cookies
 if cookies_file:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode='wb') as f:
         f.write(cookies_file.getvalue())
@@ -135,9 +144,7 @@ with tab_file:
 
 # --- LÓGICA PRINCIPAL ---
 if processar and api_key:
-    # Garante que usamos a versão mais atualizada da instrução
     instrucao_final = st.session_state.get("text_area_input", "")
-    
     processor = VideoProcessor(api_key)
     
     try:
